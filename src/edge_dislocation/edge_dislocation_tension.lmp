@@ -3,6 +3,9 @@
 
 # EAM Potential: L. Proville, D. Rodney, and M.-C. Marinica (2012), "Quantum effect on thermally activated glide of dislocations", Nature Materials, 11(10), 845-849. DOI: 10.1038/nmat3401.
 
+# Clear previous data in Dump Folder
+shell del /q dump\*
+
 # Set the units
 units metal
 atom_style atomic
@@ -13,7 +16,7 @@ boundary p p p
 # Get lammps to creat bcc lattice
 # Default orientation: [100], [010], and [001] directions along the x, y, and z axes respectively
 lattice bcc 2.866
-region box block 0 4 0 4 0 4
+region box block 0 5 0 10 0 20
 create_box 1 box
 create_atoms 1 box
 
@@ -50,7 +53,7 @@ dump 1 all custom 500 dump/dumpFile.* id type id type x y z vx vy vz c_csym c_pe
 thermo_style custom step dt time temp press ke pe etotal
 thermo 100
 
-run 5000  # Run for 50000 timesteps for equilibration
+run 50000  # Run for 20000 timesteps for equilibration
 unfix 1
 undump 1
 
@@ -62,8 +65,11 @@ print "System Thermalised"
 
 reset_timestep 0 
 
-fix 1 all npt temp 300 300 1 x 0 0 1 y 0 0 1 drag 1 # apply the NPT ensemble to control the system's temperature at 300 K and pressure in the x and y directions with a relaxation time of 1 timestep, while also applying a drag coefficient of 1 for viscous damping
-fix 2 all deform 1 z erate 1e-8 units box # applies a deformation fix to the system, deforming the simulation box along the x-axis at a strain rate of ${srate1} (which is a variable), using box units for the deformation and remapping the atom positions in the x-direction to reflect the deformation.
+# fix 1 all nph temp 300 300 10 x 0 0 1 y 0 0 1 drag 1 # apply the NPH ensemble to control the system's temperature at 300 K and pressure in the x and y directions with a relaxation time of 1 timestep, while also applying a drag coefficient of 1 for viscous damping
+
+fix 2 all langevin 300 300 10 123456 # Apply the Langevin thermostat for constant temperature during deformation
+
+fix 3 all deform 1 z erate 1e-3 units box # applies a deformation fix to the system, deforming the simulation box along the x-axis at a strain rate of ${srate1} (which is a variable), using box units for the deformation and remapping the atom positions in the x-direction to reflect the deformation.
 
 # Calculate the strain in the z-direction based on the initial and current box lengths (Lz) for the units "metal"
 variable strain equal "(lz - v_L0)/v_L0"
@@ -77,8 +83,17 @@ variable p3 equal "-pyy/10000"
 variable p4 equal "-pzz/10000"
 
 # Print the strain and stress components (p1, p2, p3, p4) to a file every 100 timesteps
-# The output is written to the file "Al_SC_100.def1.txt" and not to the screen
-fix def1 all print 100 "${p1} ${p2} ${p3} ${p4}" file Fe_single_crystal_strain_stress_output.txt screen no
+# The output is written to the file "Fe_single_crystal_strain_stress_output.txt" and not to the screen
+fix def1 all print 250 "${p1} ${p2} ${p3} ${p4}" file stress_strain.txt screen no
+
+# Store the boxlength as variables
+variable box_step equal "step"
+variable box_x equal "lx"
+variable box_y equal "ly"
+variable box_z equal "lz"
+
+# Print the box size as to a file "box_size"
+fix def2 all print 250 "${box_step} ${box_x} ${box_y} ${box_z}" file box_info.txt screen no
 
 # Dump files
 dump 1 all custom 250 dump/dumpFile.* id type x y z vx vy vz c_csym c_peratom fx fy fz # Dump atomic data (ID, type, positions, velocities, stress, and forces) every 250 timesteps into files named dumpFile.* in the dump folder.
@@ -87,7 +102,9 @@ dump 1 all custom 250 dump/dumpFile.* id type x y z vx vy vz c_csym c_peratom fx
 thermo  250
 thermo_style custom step v_strain temp v_p2 v_p3 v_p4 ke pe press
 
-run 20000
+run 200000 # Run for 2000000 iterations
+
+print "Simulation Executed..."
 
 # "mpiexec -np 2 lmp -in edge_dislocation_tension.lmp"
 # "lmp -in edge_dislocation_tension.lmp"
