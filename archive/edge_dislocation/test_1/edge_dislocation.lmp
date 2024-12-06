@@ -1,0 +1,152 @@
+## Edge Dislocation Molecular Dynamics Study
+# Ethan L. Edmunds, Dec 2024
+
+# Clear previous data in Dump folder
+shell del/q dump\*
+
+# Set the units
+units metal
+atom_style atomic
+
+# Set boundary conditions to be periodic in all axes
+boundary p p p
+
+# Get lammps to creat bcc lattice
+# Default orientation: [111], [-101], and [1-21] directions along the x, y, and z axes respectively
+read_data Fe_dislocation_dipole_supercell.lmp
+
+# Change the box to trilinic
+change_box all triclinic
+
+# Select EAM potential to use
+pair_style eam/fs
+pair_coeff * * MCM2011_eam.fs Fe
+
+print "Files loaded and ready for processing..."
+
+# Calculate and print bounding box for the simulation box
+variable xlo equal bound(all,xmin)
+variable xhi equal bound(all,xmax)
+variable ylo equal bound(all,ymin)
+variable yhi equal bound(all,ymax)
+variable zlo equal bound(all,zmin)
+variable zhi equal bound(all,zmax)
+
+# Delete some atoms in the structure
+variable zmax_del equal v_yhi-2
+variable zmin_del equal v_ylo+2
+region rdel block INF INF INF INF v_zmin_del v_zmax_del
+group rdel region rdel
+delete_atoms random fraction 0.02 no rdel NULL 123456
+
+# Calulate sizes for the bounding box
+variable delta_x equal v_xhi-v_xlo
+variable delta_y equal v_yhi-v_ylo
+variable delta_z equal v_zhi-v_zlo
+
+# Print the bounding box dimensions
+print "Bounding box dimensions:"
+print "X: ${xlo} to ${xhi}, Delta: ${delta_x}"
+print "Y: ${ylo} to ${yhi}, Delta: ${delta_y}"
+print "Z: ${zlo} to ${zhi}, Delta: ${delta_z}"
+
+# Identify regions for fixed group control
+variable bottom_ymax equal v_ylo+0.02*v_delta_y
+variable top_ymax equal v_yhi-0.02*v_delta_y
+
+# Create regions for deformation control
+region bottom_y block INF INF ${bottom_ymax} INF INF INF
+region top_y block INF INF INF ${top_ymax} INF INF
+
+group bottom_group region bottom_y
+group top_group region top_y
+
+print "Simulation Started"
+
+# SETTINGS
+compute csym all centro/atom bcc
+compute peratom all pe/atom 
+
+# Thermalisation
+# Equilibrate the system at 300 K using the Langevin thermostat
+timestep 0.001 # Timestep of 1 femto second
+
+# Initialise all the atoms with a velocity distribution corresponding to a 300K
+velocity all create 300.0 4928459 mom yes rot yes dist gaussian
+
+# Use a nose-hoover thermostat to maintain a target temperature (300k) and a barostat to regulate the pressure
+# Look up this commant to understand the thermostat and barostat used
+fix 1 all npt temp 300.0 300.0 $(100.0*dt) x 0.0 0.0 $(1000.0*dt) z 0.0 0.0 $(1000.0*dt)
+
+# Displace atoms to create edge dislocation
+displace_atoms all move 0.5 0.5 0 units lattice
+
+variable step_o equal step
+variable dt_o equal dt
+variable time_o equal time
+variable temp_o equal temp
+variable press_o equal press
+variable ke_o equal ke
+variable pe_o equal pe
+variable etotal_o equal etotal
+
+# set output options for atom level data
+fix def1 all print 200 "${step_o} ${dt_o} ${time_o} ${temp_o} ${press_o} ${ke_o} ${pe_o} ${etotal_o}" file data_analysis/Thermalisation.txt screen yes # Dump atomic data (ID, type, positions, velocities, stress, and forces) every 500 timesteps into files named dumpFile.* in the dump folder.
+
+# Set output options for lammps logfile, including frequency of data output
+thermo_style custom step dt time temp press ke pe etotal
+thermo 1000
+
+run 10000  # Run for 20000 timesteps for equilibration
+unfix 1
+
+print "System Thermalised"
+
+# Reset timesteps etc.
+reset_timestep 0 
+reset_atoms id sort yes
+
+timestep 0.0001 # 0.1 femtosecond timestep
+
+fix 1 all nve
+# fix 1 all nph iso 0.0 0.0 1000 # apply the NPH ensemble to control the system's temperature at 300 K and pressure in the x and y directions with a relaxation time of 1 timestep, while also applying a drag coefficient of 1 for viscous damping
+
+fix 3 all deform 1 xy erate 1e-3 units box # applies a deformation fix to the system, deforming the simulation box along the x-axis at a strain rate of ___, using box units for the deformation and remapping the atom positions in the x-direction to reflect the deformation.
+
+# Assign p2, p3, and p4 to the negative values of the stress components (pxx, pyy, pzz) divided by 10000 to convert to appropriate units
+variable L0 equal "ly"                       # Initial box length in y-direction
+variable strain equal "(xy/v_L0)"          # Shear strain based on tilt and initial box length
+variable stress_xy equal "-pxy/10000"      # Shear stress in xy-plane (converted to GPa)
+variable stress_xx equal "-pxx/10000"      # Normal stress in x-direction (converted to GPa)
+variable stress_yy equal "-pyy/10000"      # Normal stress in y-direction (converted to GPa)
+variable stress_zz equal "-pzz/10000"      # Normal stress in z-direction (converted to GPa)
+
+# Print the strain and stress components (p1, p2, p3, p4) to a file every 100 timesteps
+# The output is written to the file "Fe_single_crystal_strain_stress_output.txt" and not to the screen
+fix def2 all print 250 "${strain} ${stress_xx} ${stress_yy} ${stress_zz} ${stress_xy}" file data_analysis/stress_strain.txt screen no
+
+# Define variable to track box geometry
+variable box_step equal step
+variable box_x equal lx
+variable box_y equal ly
+variable box_z equal lz
+variable tilt_xy equal xy
+variable tilt_xz equal xz
+variable tilt_yz equal yz
+
+# Print the box size and angles to a file "box_info"
+fix def3 all print 250 "${box_step} ${box_x} ${box_y} ${box_z} ${tilt_xy} ${tilt_xz} ${tilt_yz}" file data_analysis/tensile_box_info.txt screen no
+
+# Display thermo
+thermo  2500
+thermo_style custom step v_strain temp ke pe press
+
+# Dump files
+dump 1 all custom 250 dump/dumpFile.* id type x y z vx vy vz c_csym c_peratom fx fy fz # Dump atomic data (ID, type, positions, velocities, stress, and forces) every 250 timesteps into files named dumpFile.* in the dump folder.
+
+run 20000 # Run for 2000000 iterations
+
+print "Simulation Executed..."
+ 
+# "mpiexec -np 2 lmp -in edge_dislocation.lmp"
+# "lmp -in edge_dislocation.lmp"
